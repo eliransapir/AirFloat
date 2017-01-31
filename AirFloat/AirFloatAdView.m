@@ -54,20 +54,16 @@
 
 - (void)dealloc {
     
-    [_images release];
-    
     for (NSTimer* timer in _timers)
         [timer invalidate];
-    
-    [_timers release];
-    
-    [super dealloc];
     
 }
 
 #pragma mark - Public Method
 
 - (void)awakeFromNib {
+    
+    [super awakeFromNib];
     
     _currentImage = 0;
     _timers = [[NSMutableArray alloc] init];
@@ -82,7 +78,7 @@
 - (void)setImages:(NSArray *)images {
     
     _currentImage = 0;
-    _images = [images retain];
+    _images = images;
     
 }
 
@@ -105,7 +101,6 @@
         for (NSTimer* timer in _timers)
             [timer invalidate];
         
-        [_timers release];
         _timers = [[NSMutableArray alloc] init];
         
         [UIView animateWithDuration:1.0
@@ -283,11 +278,6 @@
         
         [[NSRunLoop mainRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
         
-        [timer release];
-        
-        [label release];
-        [flipView release];
-        
     }
     
     UIView* oldView = nil;
@@ -298,7 +288,7 @@
     
     [UIView animateWithDuration:1.0
                           delay:0.0
-                        options:UIViewAnimationCurveEaseInOut
+                        options:UIViewAnimationOptionCurveEaseInOut
                      animations:^{
                          imageView.alpha = 1.0;
                          oldView.alpha = 0.0;
@@ -308,7 +298,7 @@
     
     [UIView animateWithDuration:duration
                           delay:0.0
-                        options:UIViewAnimationCurveEaseOut
+                        options:UIViewAnimationOptionCurveEaseOut
                      animations:^{
                          imageView.layer.transform = CATransform3DMakeScale(endScale, endScale, 1.0);
                          imageView.center = endCenter;
@@ -325,13 +315,7 @@
     
     [[NSRunLoop mainRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
     
-    [timer release];
-    
     [self addSubview:nextView];
-    
-    [imageView release];
-    [textView release];
-    [nextView release];
     
 }
 

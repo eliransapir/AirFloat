@@ -1,14 +1,24 @@
 # AirFloat
 
+[![Join the chat at https://gitter.im/trenskow/AirFloat](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/trenskow/AirFloat?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
+
+***Remark: AirFloat now compiles on iOS 9.2.1***
+
 AirFloat implements the RAOP (Remote Audio Output Protocol) also known as AirPlay Audio. Essentially this app turns your iPhone into an AirPlay audio receivier like the AirPort Express.
 
-##Contributions
-
-Thanks to [davhelm](https://github.com/davhelm) for helping out with the iOS 4.2 version.
+***Remark: Please note this repo also includes integrated libairfloat***
 
 ## Install
 
 Download, open in Xcode and build.
+
+##Contributors
+
+@davhelm
+@yfliao
+@ataibarkai
+@faisalmemon
+@JBA474
 
 ## License
 

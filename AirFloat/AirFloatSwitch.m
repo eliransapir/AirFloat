@@ -57,29 +57,6 @@
 
 @implementation AirFloatSwitch
 
-- (void)dealloc {
-    
-    [_backgroundImageView release];
-    [_backgroundHighligthedImageView release];
-    
-    [_knobView release];
-    [_knobImageView release];
-    [_knobOffImageView release];
-    [_knobOnImageView release];
-    
-    [_enabledLabelContainer release];
-    [_disabledLabelContainer release];
-    
-    [_enabledLabel release];
-    [_disabledLabel release];
-    
-    [_knobPanGestureRecognizer release];
-    [_tapGestureRecoginzer release];
-    
-    [super dealloc];
-    
-}
-
 - (void)awakeFromNib {
     
     [super awakeFromNib];
@@ -108,9 +85,9 @@
     _enabledLabel.text = @"Enabled";
     _disabledLabel.text = @"Disabled";
     
-    _enabledLabel.lineBreakMode = _disabledLabel.lineBreakMode = UILineBreakModeClip;
-    _enabledLabel.textAlignment = UITextAlignmentLeft;
-    _disabledLabel.textAlignment = UITextAlignmentRight;
+    _enabledLabel.lineBreakMode = _disabledLabel.lineBreakMode = NSLineBreakByClipping;
+    _enabledLabel.textAlignment = NSTextAlignmentLeft;
+    _disabledLabel.textAlignment = NSTextAlignmentRight;
     _enabledLabel.autoresizingMask = UIViewAutoresizingFlexibleRightMargin;
     _disabledLabel.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
     _enabledLabel.font = [UIFont boldSystemFontOfSize:12];

@@ -28,79 +28,30 @@
 //  ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 
-#import <libairfloat/audioqueue.h>
-#import <libairfloat/raopserver.h>
+#import "NSUserDefaults+AirFloatAdditions.h"
 
 #import "AppViewController.h"
-
 #import "AirFloatAppDelegate.h"
+#import <libairfloat/audiooutput.h>
 
-@interface AirFloatAppDelegate () {
-    
-    NSDictionary* _settings;
-    
-}
+@interface AirFloatAppDelegate ()
+
+@property (nonatomic, assign) raop_server_p server;
 
 @end
-
-@implementation AirFloatAppDelegate
-
-@synthesize window=_window;
-@synthesize appViewController=_appViewController;
-@synthesize server=_server;
-
-- (NSString *)settingsPath {
     
-    NSString* filename = [[[NSBundle mainBundle] bundleIdentifier] stringByAppendingPathExtension:@"plist"];
-    
-#if TARGET_IPHONE_SIMULATOR
-    NSString* path = [[NSString stringWithFormat:@"/Users/%@/Library/Preferences/", NSUserName()] stringByAppendingPathComponent:filename];
-#else
-    NSString* path = [@"/var/mobile/Library/Preferences/" stringByAppendingPathComponent:filename];
-#endif
-    
-    return path;
-    
+@implementation AirFloatAppDelegate {
+    UIBackgroundTaskIdentifier *_backgroundTask;
 }
 
-- (NSDictionary *)settings {
-    
-    if (!_settings) {
-        _settings = [[NSDictionary alloc] initWithContentsOfFile:[self settingsPath]];
-        _settings = (_settings ?: [[NSDictionary alloc] init]);
-    }
-    
-    return _settings;
-    
-}
 
-- (void)setSettings:(NSDictionary *)settings {
-    
-    [self willChangeValueForKey:@"settings"];
-    
-    [_settings release];
-    _settings = [settings copy];
-    
-    [_settings writeToFile:[self settingsPath]
-                atomically:YES];
-    
-    if (self.server) {
-        
-        NSString* password = [_settings objectForKey:@"password"];
-        
-        raop_server_set_settings(self.server, (struct raop_server_settings_t) { [[_settings objectForKey:@"name"] cStringUsingEncoding:NSASCIIStringEncoding], ([[_settings objectForKey:@"authenticationEnabled"] boolValue] && password && [password length] > 0 ? [[_settings objectForKey:@"password"] cStringUsingEncoding:NSUTF8StringEncoding] : NULL) });
-        
-    }
-    
-    [self didChangeValueForKey:@"settings"];
-        
-}
+#pragma mark - NSApplication delegates
 
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
     
-    self.appViewController = [[[AppViewController alloc] init] autorelease];
+    self.appViewController = [[AppViewController alloc] init];
     
-    self.window = [[[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds] autorelease];
+    self.window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
     
     if ([self.window respondsToSelector:@selector(setRootViewController:)])
         self.window.rootViewController = self.appViewController;
@@ -111,20 +62,37 @@
     
     [self.window makeKeyAndVisible];
     
-    return YES;
+    if ([UIApplication instancesRespondToSelector:@selector(registerUserNotificationSettings:)]){
+        [application registerUserNotificationSettings:[UIUserNotificationSettings settingsForTypes:UIUserNotificationTypeAlert|UIUserNotificationTypeBadge|UIUserNotificationTypeSound categories:nil]];
+    }
     
+    audio_output_session_start();
+    
+    return YES;
 }
 
 - (void)applicationDidBecomeActive:(UIApplication *)application {
+    [self startRaopServer];
+}
+
+- (void)applicationWillEnterForeground:(UIApplication *)application {
+    [self.appViewController handleForegroundTasks];
+}
+
+- (void)applicationDidEnterBackground:(UIApplication *)application {
+    [self.appViewController handleBackgroundTasks];
+}
+
+#pragma mark - RAOP Server interface
+
+- (void)startRaopServer  {
     
     if (!self.server) {
-        
         struct raop_server_settings_t settings;
-        settings.name = [[self.settings objectForKey:@"name"] cStringUsingEncoding:NSUTF8StringEncoding];
-        settings.password = ([[self.settings objectForKey:@"authenticationEnabled"] boolValue] ? [[self.settings objectForKey:@"password"] cStringUsingEncoding:NSUTF8StringEncoding] : NULL);
-        
+        settings.name =  [NSStandardUserDefaults.name UTF8String];
+        settings.password = (NSStandardUserDefaults.authenticationEnabled ? [NSStandardUserDefaults.password UTF8String] : NULL);
+        settings.ignore_source_volume = NSStandardUserDefaults.ignoreSourceVolume;
         self.server = raop_server_create(settings);
-        
     }
     
     if (!raop_server_is_running(self.server)) {
@@ -138,26 +106,32 @@
     
 }
 
-- (void)applicationWillResignActive:(UIApplication *)application {
+- (void)updateRaopSeverSettings {
     
-}
-
-- (void)applicationWillEnterForeground:(UIApplication *)application {
-    
-}
-
-- (void)applicationDidEnterBackground:(UIApplication *)application {
-    
-    if (self.server && !raop_server_is_recording(self.server)) {
-        raop_server_stop(self.server);
-        raop_server_destroy(self.server);
-        self.appViewController.server = self.server = NULL;
+    if (self.server) {
+        raop_server_set_settings(self.server, (struct raop_server_settings_t) {
+            [NSStandardUserDefaults.name UTF8String],
+            (NSStandardUserDefaults.authenticationEnabled ? [NSStandardUserDefaults.password UTF8String] : NULL),
+            NSStandardUserDefaults.ignoreSourceVolume
+        });
     }
     
 }
 
-- (void)applicationWillTerminate:(UIApplication *)application {
+#pragma mark - Background Notifications
+
+-(void) showNotification:(NSString*)messageTitle
+{
+    if (!messageTitle) {
+        messageTitle = @"Stream started.";
+    }
     
+    UILocalNotification *notification = [[UILocalNotification alloc] init];
+    notification.alertBody = messageTitle;
+    notification.fireDate = [NSDate date];
+    notification.soundName = UILocalNotificationDefaultSoundName;
+    
+    [[UIApplication sharedApplication] scheduleLocalNotification:notification];
 }
 
 @end

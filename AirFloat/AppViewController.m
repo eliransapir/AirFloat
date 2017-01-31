@@ -28,14 +28,13 @@
 //  ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 
-#import <MediaPlayer/MediaPlayer.h>
+#import "NSUserDefaults+AirFloatAdditions.h"
 
+#import <MediaPlayer/MediaPlayer.h>
 #import <libairfloat/webserverconnection.h>
 #import <libairfloat/dacpclient.h>
 #import <libairfloat/raopsession.h>
-
 #import "UIImage+AirFloatAdditions.h"
-
 #import "AirFloatAppDelegate.h"
 #import "AirFloatAdView.h"
 #import "SupportViewController.h"
@@ -52,6 +51,7 @@
     
 }
 
+@property (nonatomic, strong) IBOutlet UIView *containerView;
 @property (nonatomic, strong) IBOutlet UIButton* supportButton;
 @property (nonatomic, strong) IBOutlet UIButton* settingsButton;
 @property (nonatomic, strong) IBOutlet AirFloatAdView* adView;
@@ -76,11 +76,17 @@
 
 @end
 
+static const int MAXIMUM_BACKGROUND_TASKS = 2;
+static int backgroundTaskTimeLimit = 0;
+static int backgroundTaskCount = 0;
+static BOOL clientIsStreaming = false;
+
 UIBackgroundTaskIdentifier backgroundTask = 0;
+UIBackgroundTaskIdentifier helperBackgroundTask = 0;
 
 void dacpClientControlsBecameAvailable(dacp_client_p client, void* ctx) {
     
-    AppViewController* viewController = (AppViewController*)ctx;
+    AppViewController* viewController = (__bridge AppViewController*)ctx;
     
     [viewController performSelectorOnMainThread:@selector(updateControlsAvailability) withObject:nil waitUntilDone:NO];
     
@@ -88,7 +94,7 @@ void dacpClientControlsBecameAvailable(dacp_client_p client, void* ctx) {
 
 void dacpClientPlaybackStateUpdated(dacp_client_p client, enum dacp_client_playback_state state, void* ctx) {
     
-    AppViewController* viewController = (AppViewController*)ctx;
+    AppViewController* viewController = (__bridge AppViewController*)ctx;
     
     [viewController performSelectorOnMainThread:@selector(updatePlaybackState) withObject:nil waitUntilDone:NO];
     
@@ -96,7 +102,7 @@ void dacpClientPlaybackStateUpdated(dacp_client_p client, enum dacp_client_playb
 
 void dacpClientControlsBecameUnavailable(dacp_client_p client, void* ctx) {
     
-    AppViewController* viewController = (AppViewController*)ctx;
+    AppViewController* viewController = (__bridge AppViewController*)ctx;
     
     [viewController performSelectorOnMainThread:@selector(updateControlsAvailability) withObject:nil waitUntilDone:NO];
     
@@ -104,17 +110,19 @@ void dacpClientControlsBecameUnavailable(dacp_client_p client, void* ctx) {
 
 void clientStartedRecording(raop_session_p raop_session, void* ctx) {
     
-    AppViewController* viewController = (AppViewController*)ctx;
+    AppViewController* viewController = (__bridge AppViewController*)ctx;
     
     dacp_client_p client = raop_session_get_dacp_client(raop_session);
     
     if (client != NULL) {
         
-        NSAutoreleasePool* pool = [[NSAutoreleasePool alloc] init];
+        clientIsStreaming = true;
         
-        [viewController performSelectorOnMainThread:@selector(setDacpClient:) withObject:[NSValue valueWithPointer:client] waitUntilDone:NO];
+        @autoreleasepool {
         
-        [pool release];
+            [viewController performSelectorOnMainThread:@selector(setDacpClient:) withObject:[NSValue valueWithPointer:client] waitUntilDone:NO];
+        
+        }
         
         dacp_client_set_controls_became_available_callback(client, dacpClientControlsBecameAvailable, ctx);
         dacp_client_set_playback_state_changed_callback(client, dacpClientPlaybackStateUpdated, ctx);
@@ -127,19 +135,25 @@ void clientStartedRecording(raop_session_p raop_session, void* ctx) {
 }
 
 void clientEndedRecording(raop_session_p raop_session, void* ctx) {
-    
-    AppViewController* viewController = (AppViewController*)ctx;
-    
-    if ([UIApplication sharedApplication].applicationState == UIApplicationStateBackground)
+
+    AppViewController* viewController = (__bridge AppViewController*)ctx;
+
+    if ([UIApplication sharedApplication].applicationState == UIApplicationStateBackground) {
         backgroundTask = [[UIApplication sharedApplication] beginBackgroundTaskWithExpirationHandler:nil];
-    
+    }
+
     [viewController performSelectorOnMainThread:@selector(clientEndedRecording) withObject:nil waitUntilDone:NO];
-    
+
 }
 
 void clientEnded(raop_session_p raop_session, void* ctx) {
     
-    AppViewController* viewController = (AppViewController*)ctx;
+    AppViewController* viewController = (__bridge AppViewController*)ctx;
+    
+    if ([UIApplication sharedApplication].applicationState == UIApplicationStateBackground && clientIsStreaming) {
+        clientIsStreaming = false;
+        [AirFloatSharedAppDelegate showNotification:@"Client disconnected."];
+    }
     
     [viewController performSelectorOnMainThread:@selector(clientEnded) withObject:nil waitUntilDone:NO];
     
@@ -147,48 +161,41 @@ void clientEnded(raop_session_p raop_session, void* ctx) {
 
 void clientUpdatedArtwork(raop_session_p raop_session, const void* data, size_t data_size, const char* mime_type, void* ctx) {
     
-    NSAutoreleasePool* pool = [[NSAutoreleasePool alloc] init];
+    @autoreleasepool {
     
-    AppViewController* viewController = (AppViewController*)ctx;
+        AppViewController* viewController = (__bridge AppViewController*)ctx;
+        
+        UIImage* image = nil;
+        
+        if (strcmp(mime_type, "image/none") != 0) {
+            NSData* imageData = [[NSData alloc] initWithBytes:data length:data_size];
+            image = [[UIImage imageWithData:imageData] imageWithScale:[UIScreen mainScreen].scale];
+        }
+        
+        [viewController performSelectorOnMainThread:@selector(clientUpdatedArtwork:) withObject:image waitUntilDone:NO];
     
-    UIImage* image = nil;
-    
-    if (strcmp(mime_type, "image/none") != 0) {
-        NSData* imageData = [[NSData alloc] initWithBytes:data length:data_size];
-        image = [[UIImage imageWithData:imageData] imageWithScale:[UIScreen mainScreen].scale];
-        [imageData release];
     }
-    
-    [viewController performSelectorOnMainThread:@selector(clientUpdatedArtwork:) withObject:image waitUntilDone:NO];
-    
-    [pool release];
     
 }
 
 void clientUpdatedTrackInfo(raop_session_p raop_session, const char* title, const char* artist, const char* album, void* ctx) {
     
-    NSAutoreleasePool* pool = [[NSAutoreleasePool alloc] init];
+    @autoreleasepool {
     
-    AppViewController* viewController = (AppViewController*)ctx;
-    
-    NSString* trackTitle = [[NSString alloc] initWithCString:title encoding:NSUTF8StringEncoding];
-    NSString* artistTitle = [[NSString alloc] initWithCString:artist encoding:NSUTF8StringEncoding];
-    NSString* albumTitle = [[NSString alloc] initWithCString:album encoding:NSUTF8StringEncoding];
-    
-    NSInvocation* invocation = [NSInvocation invocationWithMethodSignature:[viewController methodSignatureForSelector:@selector(clientUpdatedTrackInfo:artistName:andAlbumTitle:)]];
-    [invocation setSelector:@selector(clientUpdatedTrackInfo:artistName:andAlbumTitle:)];
-    [invocation setTarget:viewController];
-    [invocation setArgument:&trackTitle atIndex:2];
-    [invocation setArgument:&artistTitle atIndex:3];
-    [invocation setArgument:&albumTitle atIndex:4];
-    [invocation retainArguments];
-    
-    [invocation performSelectorOnMainThread:@selector(invoke) withObject:nil waitUntilDone:YES];
-    
-    [trackTitle release];
-    [artistTitle release];
+        AppViewController* viewController = (__bridge AppViewController*)ctx;
         
-    [pool release];
+        NSString* trackTitle = [[NSString alloc] initWithCString:title encoding:NSUTF8StringEncoding];
+        NSString* artistTitle = [[NSString alloc] initWithCString:artist encoding:NSUTF8StringEncoding];
+        NSString* albumTitle = [[NSString alloc] initWithCString:album encoding:NSUTF8StringEncoding];
+        
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [viewController clientUpdatedTrackInfo:trackTitle
+                                        artistName:artistTitle
+                                     andAlbumTitle:albumTitle];
+        });
+            
+    
+    }
     
 }
 
@@ -204,19 +211,26 @@ void newServerSession(raop_server_p server, raop_session_p new_session, void* ct
 
 @implementation AppViewController
 
+- (int)getBackgroundTaskCount {
+    return backgroundTaskCount;
+}
+
+- (void)incrementBackgroundTaskCount {
+    if (backgroundTaskCount >= 0) {
+        backgroundTaskCount++;
+    }
+}
+
+- (void)resetBackgroundTaskCount {
+    backgroundTaskCount = 0;
+}
+
 - (void)dealloc {
     
     [[NSNotificationCenter defaultCenter] removeObserver:self];
     
-    self.adView = nil;
-    self.topView = self.bottomView = nil;
-    self.artworkImageView = nil;
-    self.trackTitelLabel = self.artistNameLabel = nil;
     
-    [_artworkImage release];
-    [_albumTitle release];
     
-    [super dealloc];
     
 }
 
@@ -231,7 +245,7 @@ void newServerSession(raop_server_p server, raop_session_p new_session, void* ct
     [self willChangeValueForKey:@"server"];
     
     if (server) {
-        raop_server_set_new_session_callback(server, newServerSession, self);
+        raop_server_set_new_session_callback(server, newServerSession, (__bridge void *)(self));
         [self.adView startAnimation];
     } else
         [self.adView stopAnimation];
@@ -269,7 +283,7 @@ void newServerSession(raop_server_p server, raop_session_p new_session, void* ct
     
     if ([[UIDevice currentDevice].systemVersion floatValue] >= 6) {
         
-        self.blurredArtworkImageView = [[[UIImageView alloc] initWithFrame:self.artworkImageView.frame] autorelease];
+        self.blurredArtworkImageView = [[UIImageView alloc] initWithFrame:self.artworkImageView.frame];
         self.blurredArtworkImageView.autoresizingMask = self.artworkImageView.autoresizingMask;
         self.blurredArtworkImageView.contentMode = self.artworkImageView.contentMode;
         self.blurredArtworkImageView.clipsToBounds = self.artworkImageView.clipsToBounds;
@@ -306,18 +320,36 @@ void newServerSession(raop_server_p server, raop_session_p new_session, void* ct
     
 }
 
+- (void)viewWillAppear:(BOOL)animated {
+    
+    [super viewWillAppear:animated];
+    
+    if ([[UIDevice currentDevice].systemVersion floatValue] >= 7.0) {
+        CGRect frame = self.containerView.frame;
+        frame.origin.y = 20.0;
+        frame.size.height -= 20.0;
+        self.containerView.frame = frame;
+    }
+    
+}
+
 - (void)viewDidAppear:(BOOL)animated {
     
     [super viewDidAppear:animated];
     
     if (self.server)
         [self.adView startAnimation];
+}
+
+- (UIStatusBarStyle)preferredStatusBarStyle {
+    
+    return UIStatusBarStyleLightContent;
     
 }
 
 - (void)displayViewControllerAsOverlay:(UIViewController*)viewController {
     
-    _overlaidViewController = [viewController retain];
+    _overlaidViewController = viewController;
     _overlaidViewController.view.frame = self.overlaidViewContainer.bounds;
     [self.overlaidViewContainer addSubview:viewController.view];
     
@@ -366,7 +398,6 @@ void newServerSession(raop_server_p server, raop_session_p new_session, void* ct
                          
                          [_overlaidViewController viewDidDisappear:YES];
                          
-                         [_overlaidViewController release];
                          _overlaidViewController = nil;
                          
                      }];
@@ -378,7 +409,7 @@ void newServerSession(raop_server_p server, raop_session_p new_session, void* ct
     BOOL visible = (_overlaidViewController != nil);
     
     if (!visible)
-        [self displayViewControllerAsOverlay:[[[SupportViewController alloc] init] autorelease]];
+        [self displayViewControllerAsOverlay:[[SupportViewController alloc] init]];
     else
         [self dismissOverlayViewController];
     
@@ -401,7 +432,7 @@ void newServerSession(raop_server_p server, raop_session_p new_session, void* ct
     BOOL visible = (_overlaidViewController != nil);
     
     if (!visible)
-        [self displayViewControllerAsOverlay:[[[SettingsViewController alloc] init] autorelease]];
+        [self displayViewControllerAsOverlay:[[SettingsViewController alloc] init]];
     else
         [self dismissOverlayViewController];
     
@@ -437,14 +468,13 @@ void newServerSession(raop_server_p server, raop_session_p new_session, void* ct
                     [nowPlayingInfo setObject:_albumTitle forKey:MPMediaItemPropertyAlbumTitle];
                 
                 if (_artworkImage)
-                    [nowPlayingInfo setObject:[[[MPMediaItemArtwork alloc] initWithImage:_artworkImage] autorelease]
-                                   forKey:MPMediaItemPropertyArtwork];
+                    [nowPlayingInfo setObject:[[MPMediaItemArtwork alloc] initWithImage:_artworkImage]
+                                       forKey:MPMediaItemPropertyArtwork];
                 
                 [MPNowPlayingInfoCenter defaultCenter].nowPlayingInfo = nowPlayingInfo;
                 
             }
             
-            [nowPlayingInfo release];
             
         } else
             [MPNowPlayingInfoCenter defaultCenter].nowPlayingInfo = nil;
@@ -529,9 +559,7 @@ void newServerSession(raop_server_p server, raop_session_p new_session, void* ct
                          self.blurredArtworkImageView.alpha = 0.0;
                          self.artworkImageView.image = [UIImage imageNamed:@"NoArtwork.png"];
                          self.blurredArtworkImageView.image = nil;
-                         [_artworkImage release];
                          _artworkImage = nil;
-                         [_albumTitle release];
                          _albumTitle = nil;
                      }];
     
@@ -545,6 +573,7 @@ void newServerSession(raop_server_p server, raop_session_p new_session, void* ct
 
 - (void)stopBackgroundTask {
     
+    NSLog(@"stopBackgroundTask called");
     UIBackgroundTaskIdentifier identifier = backgroundTask;
     backgroundTask = 0;
     [[UIApplication sharedApplication] endBackgroundTask:identifier];
@@ -553,10 +582,10 @@ void newServerSession(raop_server_p server, raop_session_p new_session, void* ct
 
 - (void)clientEnded {
     
-    if ([UIApplication sharedApplication].applicationState == UIApplicationStateBackground && backgroundTask > 0) {
-        raop_server_stop(self.server);
-        [self performSelector:@selector(stopBackgroundTask) withObject:nil afterDelay:1.0];
-    }
+//    if ([UIApplication sharedApplication].applicationState == UIApplicationStateBackground && backgroundTask > 0) {
+//        raop_server_stop(self.server);
+//        [self performSelector:@selector(stopBackgroundTask) withObject:nil afterDelay:1.0];
+//    }
     
 }
 
@@ -584,8 +613,7 @@ void newServerSession(raop_server_p server, raop_session_p new_session, void* ct
     
     [self setAndScaleImage:(image ?: [UIImage imageNamed:@"NoArtwork.png"])];
     
-    [_artworkImage release];
-    _artworkImage = [image retain];
+    _artworkImage = image;
     
     [self updateNowPlayingInfoCenter];
     
@@ -596,7 +624,6 @@ void newServerSession(raop_server_p server, raop_session_p new_session, void* ct
     self.trackTitelLabel.text = trackTitle;
     self.artistNameLabel.text = artistName;
     
-    [_albumTitle release];
     _albumTitle = albumTitle;
     
     [self updateNowPlayingInfoCenter];
@@ -714,11 +741,11 @@ void newServerSession(raop_server_p server, raop_session_p new_session, void* ct
 
 - (void)updateScreenIdleState {
     
-    BOOL disabled = [[AirFloatSharedAppDelegate.settings objectForKey:@"keepScreenLit"] boolValue];
+    BOOL disabled = NSStandardUserDefaults.keepScreenLit;
     
-    disabled &= (![[AirFloatSharedAppDelegate.settings objectForKey:@"keepScreenLitOnlyWhenReceiving"] boolValue] || (_server != NULL && raop_server_is_recording(_server)));
+    disabled &= (!NSStandardUserDefaults.keepScreenLitOnlyWhenReceiving || (_server != NULL && raop_server_is_recording(_server)));
     
-    disabled &= (![[AirFloatSharedAppDelegate.settings objectForKey:@"keepScreenLitOnlyWhenConnectedToPower"] boolValue] || ([UIDevice currentDevice].batteryState == UIDeviceBatteryStateCharging || [UIDevice currentDevice].batteryState == UIDeviceBatteryStateFull));
+    disabled &= (!NSStandardUserDefaults.keepScreenLitOnlyWhenConnectedToPower || ([UIDevice currentDevice].batteryState == UIDeviceBatteryStateCharging || [UIDevice currentDevice].batteryState == UIDeviceBatteryStateFull));
     
     [UIApplication sharedApplication].idleTimerDisabled = disabled;
     
@@ -733,7 +760,136 @@ void newServerSession(raop_server_p server, raop_session_p new_session, void* ct
 - (void)batteryStateChanged:(NSNotification *)notification {
     
     [self updateScreenIdleState];
-    
 }
 
+
+#pragma mark - Workaround for iOS Background Mode restrictions
+
+dispatch_block_t helperBackgroundTaskBlock = ^{
+    [[NSThread currentThread] setName:@"helperBackgroundTaskBlock.init"];
+    [[UIApplication sharedApplication] endBackgroundTask:helperBackgroundTask];
+    helperBackgroundTask = UIBackgroundTaskInvalid;
+    helperBackgroundTask = [[UIApplication sharedApplication] beginBackgroundTaskWithExpirationHandler:helperBackgroundTaskBlock];
+};
+
+
+#pragma mark - Handler for background/foreground state switch
+
+-(void)handleForegroundTasks {
+    NSLog(@"handleForegroundTasks called");
+    [self resetBackgroundTaskCount];
+    [self stopHelperBackgroundTask];
+    [self stopBackgroundTask];
+}
+
+-(void)handleBackgroundTasks {
+    NSLog(@"handleBackgroundTasks called");
+    UIDevice *device = [UIDevice currentDevice];
+    BOOL backgroundSupported = NO;
+    if ([device respondsToSelector:@selector(isMultitaskingSupported)]) {
+        backgroundSupported = device.multitaskingSupported;
+    }
+    if (backgroundSupported) { // perform a background task
+        
+        [self setBackgroundTaskTimeLimit];
+        [self doBackgroundTaskAsync:@selector(keepAlive)];
+        [self performSelector:@selector(doBackgroundTaskAsync:) withObject:nil afterDelay:[self getBackgroundTaskStartupDelay]];
+
+    }
+}
+
+-(void)setBackgroundTaskTimeLimit {
+    [self startHelperBackgroundTask];
+    
+    // Wait for background async task by 'OhadM':
+    // http://stackoverflow.com/a/31893720
+    dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+    
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
+        @autoreleasepool {
+            
+            [[NSThread currentThread] setName:@"setBackgroundTaskTimeLimit.dispatch_async"];
+            backgroundTaskTimeLimit = [[UIApplication sharedApplication ] backgroundTimeRemaining];
+            NSLog(@"setBackgroundTaskTimeLimit to: %i", backgroundTaskTimeLimit);
+            
+        }
+        dispatch_semaphore_signal(semaphore);
+    });
+    
+    dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
+    [self stopHelperBackgroundTask];
+}
+
+-(void)stopHelperBackgroundTask {
+    NSLog(@"stopHelperBackgroundTask called");
+    helperBackgroundTaskBlock = ^{
+        [[NSThread currentThread] setName:@"helperBackgroundTaskBlock.stopped"];
+        [[UIApplication sharedApplication] endBackgroundTask:helperBackgroundTask];
+        helperBackgroundTask = UIBackgroundTaskInvalid;
+    };
+    if (helperBackgroundTask) {
+        [[UIApplication sharedApplication] endBackgroundTask:helperBackgroundTask];
+        helperBackgroundTask = UIBackgroundTaskInvalid;
+    }
+}
+
+-(void)startHelperBackgroundTask {
+    NSLog(@"startHelperBackgroundTask called");
+    if (!helperBackgroundTaskBlock) {
+        helperBackgroundTaskBlock = ^{
+            [[NSThread currentThread] setName:@"helperBackgroundTaskBlock.started"];
+            [[UIApplication sharedApplication] endBackgroundTask:helperBackgroundTask];
+            helperBackgroundTask = UIBackgroundTaskInvalid;
+        };
+    }
+    helperBackgroundTask = [[UIApplication sharedApplication] beginBackgroundTaskWithExpirationHandler:helperBackgroundTaskBlock];
+}
+
+-(void)restartHelperBackgroundTask {
+    NSLog(@"restartHelperBackgroundTask called");
+    [self stopHelperBackgroundTask];
+    [self startHelperBackgroundTask];
+}
+
+-(int)getBackgroundTaskStartupDelay {
+    int target = 10;
+    int startupDelay = 0;
+    
+    if (backgroundTaskTimeLimit >= target) {
+        startupDelay = backgroundTaskTimeLimit - target;
+    }
+    
+    return startupDelay;
+}
+
+-(void)doBackgroundTaskAsync:(SEL)selector {
+    
+    NSLog(@"doBackgroundTaskAsync called");
+    if ([[UIApplication sharedApplication] applicationState] != UIApplicationStateBackground
+       || [self getBackgroundTaskCount] >= MAXIMUM_BACKGROUND_TASKS) {
+        NSLog(@"doBackgroundTaskAsync denied start");
+        return;
+    }
+    
+    [self startHelperBackgroundTask];
+    
+    [self incrementBackgroundTaskCount];
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
+        [[NSThread currentThread] setName:@"doBackgroundTaskAsync.dispatch_async"];
+        while ([[UIApplication sharedApplication] applicationState] == UIApplicationStateBackground) {
+            NSLog(@"doBackgroundTaskAsync in while loop. TR: %f",  [[UIApplication sharedApplication] backgroundTimeRemaining]);
+            [self performSelector: @selector(keepAlive)];
+            sleep(5.0);
+        }
+        NSLog(@"doBackgroundTaskAsync task ended");
+    });
+}
+
+
+#pragma mark - Restarts RAOP instance when needed
+
+-(void)keepAlive {
+    [AirFloatSharedAppDelegate startRaopServer];
+    NSLog(@"keepAlive");
+}
 @end
